@@ -19,7 +19,7 @@ jobs:
   review:
     if: github.event.issue.pull_request && github.event.comment.user.login == 'qodo-code-review[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     # The PR branch is not trusted: only factory code from the default branch
     # runs, and GH_TOKEN is given only to the steps that need it.
     env:
@@ -63,6 +63,7 @@ jobs:
         if: steps.pr.outputs.branch
         run: id -u "$FACTORY_TEST_USER" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$FACTORY_TEST_USER"
       - name: Install Claude Code
+        if: steps.pr.outputs.branch
         run: npm install -g @anthropic-ai/claude-code@2.1.318
       - name: Read the review and act on it
         if: steps.pr.outputs.branch
