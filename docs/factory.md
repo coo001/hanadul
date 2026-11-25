@@ -40,18 +40,21 @@ Then the workflow either:
 
 ## Review
 
-Qodo reviews the PR. `.github/workflows/factory-review.yml` reads Qodo's
-comment:
+Qodo reviews the PR. Qodo skips PRs opened by bots by default, so
+`.pr_agent.toml` turns that off (`[github_app] ignore_bot_pr = false`).
+`.github/workflows/factory-review.yml` runs when Qodo posts or edits its
+summary comment (it edits the same comment each time it reviews again). A
+review whose comment is older than the PR's latest commit is ignored. For a
+current review:
 
-- no findings: it says so on the PR and waits. If the PR head has a newer
-  commit than the review comment (created or last edited), it says the review
-  predates that commit instead, and waits for a new review;
+- no findings: it says so on the PR once per commit and waits;
 - findings: the runner gets the review text and the number of findings,
   checks each finding against the code, fixes the ones it confirms and
   explains the ones it rejects. The reply must answer every finding with
   `fixed` or `not a problem` and a reason, and change at least one file if
-  anything is `fixed`; otherwise the attempt counts as failed. After two fix
-  rounds it stops.
+  anything is `fixed`; otherwise the attempt counts as failed. After pushing
+  the fix it comments `/agentic_review`, because Qodo does not review pushes
+  on its own. After two fix rounds it stops.
 
 Whenever the review workflow stops for a person, it adds `needs-human` to the
 PR and moves the ticket from `in-review` to `needs-human`.
@@ -84,7 +87,7 @@ the model writes are untrusted code.
 ## What stays with a person
 
 Merging. Writing tickets. Anything labelled `needs-human`. Changes to
-`AGENTS.md`, `factory/` and `.github/`.
+`AGENTS.md`, `.pr_agent.toml`, `factory/` and `.github/`.
 
 ## Limits
 
