@@ -63,7 +63,19 @@ If something outside the ticket looks wrong, open a new issue and leave it.
 - Why: a small PR can be checked against its ticket line by line, by me and
   by the reviewer.
 
-## Out of range or unsure
+### 6. The No Stray Errors Rule
+An exported function either returns a reading or throws a `RangeError` that
+names the function and shows the input. That holds for every argument,
+including an options argument that is `null` or the wrong type. No
+`TypeError` from inside the function may reach the caller. Each exported
+function has a test that passes `null` in every argument position.
+- Applies to: every `export` in `src/`.
+- Why: after PR #8, `readNative(3, null)` failed with "Cannot read properties
+  of null (reading 'beforeCounter')". Five reviews and the acceptance tests
+  were clean, because the ticket only listed bad numbers, not bad options.
+  The caller sees an error about our internals instead of their input.
 
-Throw a `RangeError` for numbers a function doesn't cover. Don't guess a
-reading. If a rule of Korean is unclear, stop and ask in the issue.
+## When unsure
+
+Don't guess a reading. If a rule of Korean is unclear, stop and ask in the
+issue.
