@@ -68,34 +68,55 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           COMMENT: ${{ github.event.comment.body }}
+          COMMENT_CREATED: ${{ github.event.comment.created_at }}
+          COMMENT_UPDATED: ${{ github.event.comment.updated_at }}
           ISSUE: ${{ steps.pr.outputs.issue }}
           BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
+          # Hand the PR and its ticket to a person. The ticket may not carry in-review.
+          to_person() {
+            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label in-review --add-label needs-human \
+              || gh issue edit "$ISSUE" -R "$REPO" --add-label needs-human || true
+          }
           mkdir -p .factory && printf '%s' "$COMMENT" > .factory/review.html
           count="$(node -e "import('./.factory-trusted/factory/lib.mjs').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
-          sha="$(git rev-parse --short HEAD)"
           if [ "$count" = "null" ]; then echo "Not a review summary."; exit 0; fi
           # The factory never changes its own rules, code or workflows.
           own="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" -- factory .github AGENTS.md)"
           if [ -n "$own" ]; then
             gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: this branch changes factory/, .github/ or AGENTS.md compared with %s. Stopping here for a person.\n\n```\n%s\n```' "$DEFAULT_BRANCH" "$own")"
-            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            to_person
             exit 0
           fi
           if [ "$count" = "0" ]; then
-            gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo reported no findings on $sha. Tests passed in the runner. Waiting for a person to decide on the merge."
+            head="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)"
+            # The review counts for the commit it saw. Use the later of the comment's
+            # created and updated times (Qodo may edit its comment).
+            reviewed="$(date -d "$COMMENT_CREATED" +%s)"
+            if [ -n "$COMMENT_UPDATED" ]; then
+              updated="$(date -d "$COMMENT_UPDATED" +%s)"
+              if [ "$updated" -gt "$reviewed" ]; then reviewed="$updated"; fi
+            fi
+            committed="$(git log -1 --format=%ct HEAD)"
+            # If the PR head is not the checked-out commit, the branch moved after this run started.
+            if [ "$head" != "$(git rev-parse HEAD)" ] || [ "$committed" -gt "$reviewed" ]; then
+              gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo's clean review predates the latest commit (${head:0:7}), so it is not reported as clean. Waiting for a review of that commit."
+              exit 0
+            fi
+            gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo reported no findings on ${head:0:7}. Tests passed in the runner. Waiting for a person to decide on the merge."
             exit 0
           fi
           rounds="$(git log --oneline origin/main..HEAD --grep='^Review round' | wc -l | tr -d ' ')"
           if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
             gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo still reports $count finding(s) after $rounds fix rounds. Stopping here for a person."
-            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            to_person
             exit 0
           fi
-          REVIEW_FILE=.factory/review.html node .factory-trusted/factory/run-ticket.mjs
+          REVIEW_FILE=.factory/review.html REVIEW_COUNT="$count" node .factory-trusted/factory/run-ticket.mjs
           if [ "$(cat .factory/status)" != "ok" ]; then
             gh pr comment "$PR" -R "$REPO" --body-file .factory/log.md
-            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            to_person
             exit 0
           fi
           # Stage only what the runner wrote; any other change stops the run.
@@ -103,7 +124,7 @@ jobs:
           extra="$(git status --porcelain --untracked-files=all -- . ':!.factory' | grep -v '^[AM]  ' || true)"
           if [ -n "$extra" ]; then
             gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: files changed that the runner did not write. Nothing was pushed.\n\n```\n%s\n```' "$extra")"
-            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            to_person
             exit 0
           fi
           gh pr comment "$PR" -R "$REPO" --body-file .factory/pr-body.md
