@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toClaudePrompt, extractJson, checkPaths, parseReply, countFindings, stripHtml, isCopied, testCommand, fileList, selectContext, checkOverwrites, checkReviewReply, buildPrompt } from '../factory/lib.mjs';
+import { reviewedCommit, toClaudePrompt, extractJson, checkPaths, parseReply, countFindings, stripHtml, isCopied, testCommand, fileList, selectContext, checkOverwrites, checkReviewReply, buildPrompt } from '../factory/lib.mjs';
 
 test('the factory may write code, tests and docs', () => {
   assert.equal(checkPaths(['src/digits.js', 'test/digits.test.js', 'README.md', 'docs/spec.md']), '');
@@ -128,4 +128,12 @@ test('extractJson takes the object out of code fences and surrounding text', () 
   assert.equal(extractJson('```json\n{"a":{"b":1}}\n```'), '{"a":{"b":1}}');
   assert.equal(extractJson('Here it is: {"a":1} done'), '{"a":1}');
   assert.equal(extractJson('OK'), 'OK');
+});
+
+test('reviewedCommit reads the commit from Qodo\'s hidden marker', () => {
+  const sha = '95eaeacbb5986604929174c6ae3fdc2ffd0ff725';
+  const body = `<h3>Code Review by Qodo</h3>\n<!-- https://github.com/coo001/hanadul/commit/${sha} -->\n<details><summary>Results up to commit 3c35e51</summary></details>`;
+  assert.equal(reviewedCommit(body), sha);
+  assert.equal(reviewedCommit('<h3>Code Review by Qodo</h3> Results up to commit 3c35e51'), null);
+  assert.equal(reviewedCommit(''), null);
 });
