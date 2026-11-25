@@ -84,46 +84,52 @@ jobs:
               || gh issue edit "$ISSUE" -R "$REPO" --add-label needs-human || true
           }
           mkdir -p .factory && printf '%s' "$COMMENT" > .factory/review.html
-          count="$(node -e "import('./.factory-trusted/factory/lib.mjs').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
+          lib='./.factory-trusted/factory/lib.mjs'
+          count="$(node -e "import('$lib').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
           if [ "$count" = "null" ]; then echo "Not a review summary."; exit 0; fi
+          head="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)"
+          if [ "$head" != "$(git rev-parse HEAD)" ]; then echo "The branch moved during this run; a newer run handles it."; exit 0; fi
+          # Act only on a review of the current head. Qodo names the commit it reviewed
+          # in a hidden marker; without one, fall back to comparing times.
+          reviewed_sha="$(node -e "import('$lib').then(m=>console.log(m.reviewedCommit(require('fs').readFileSync('.factory/review.html','utf8'))??''))")"
+          if [ -n "$reviewed_sha" ]; then
+            if [ "$reviewed_sha" != "$head" ]; then echo "This review is of ${reviewed_sha:0:7}, not the head ${head:0:7}."; exit 0; fi
+          else
+            reviewed="$(date -d "$COMMENT_CREATED" +%s)"
+            if [ -n "$COMMENT_UPDATED" ]; then
+              updated="$(date -d "$COMMENT_UPDATED" +%s)"
+              if [ "$updated" -gt "$reviewed" ]; then reviewed="$updated"; fi
+            fi
+            if [ "$(git log -1 --format=%ct HEAD)" -gt "$reviewed" ]; then echo "This review predates the head ${head:0:7}."; exit 0; fi
+          fi
+          # Qodo edits the same summary several times. Every factory comment about this
+          # head carries a marker, and a head that already has one is not handled again.
+          marker="<!-- factory:handled $head -->"
+          if gh pr view "$PR" -R "$REPO" --json comments --jq '.comments[].body' | grep -qF "$marker"; then
+            echo "Already handled ${head:0:7}."; exit 0
+          fi
+          say() { gh pr comment "$PR" -R "$REPO" --body "$(printf '%s\n\n%s' "$1" "$marker")"; }
+          say_file() { printf '\n\n%s\n' "$marker" >> "$1"; gh pr comment "$PR" -R "$REPO" --body-file "$1"; }
           # The factory never changes its own rules, code or workflows.
           own="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" -- factory .github AGENTS.md .pr_agent.toml)"
           if [ -n "$own" ]; then
-            gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: this branch changes factory/, .github/, AGENTS.md or .pr_agent.toml compared with %s. Stopping here for a person.\n\n```\n%s\n```' "$DEFAULT_BRANCH" "$own")"
+            say "$(printf 'Factory: this branch changes factory/, .github/, AGENTS.md or .pr_agent.toml compared with %s. Stopping here for a person.\n\n```\n%s\n```' "$DEFAULT_BRANCH" "$own")"
             to_person
             exit 0
           fi
-          head="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)"
-          # A review counts only for the commit it saw. Use the later of the comment's
-          # created and updated times (Qodo edits its comment when it reviews again).
-          reviewed="$(date -d "$COMMENT_CREATED" +%s)"
-          if [ -n "$COMMENT_UPDATED" ]; then
-            updated="$(date -d "$COMMENT_UPDATED" +%s)"
-            if [ "$updated" -gt "$reviewed" ]; then reviewed="$updated"; fi
-          fi
-          committed="$(git log -1 --format=%ct HEAD)"
-          # An older review (or the branch moving during this run) is ignored without a
-          # comment: the factory asks Qodo to review every commit it pushes.
-          if [ "$head" != "$(git rev-parse HEAD)" ] || [ "$committed" -gt "$reviewed" ]; then
-            echo "This review predates the latest commit ${head:0:7}; waiting for a review of that commit."
-            exit 0
-          fi
           if [ "$count" = "0" ]; then
-            clean="Factory: Qodo reported no findings on ${head:0:7}."
-            # Qodo may edit the same clean summary again; report it once per commit.
-            if gh pr view "$PR" -R "$REPO" --json comments --jq '.comments[].body' | grep -qF "$clean"; then exit 0; fi
-            gh pr comment "$PR" -R "$REPO" --body "$clean Tests passed in the runner. Waiting for a person to decide on the merge."
+            say "Factory: Qodo reported no findings on ${head:0:7}. Tests passed in the runner. Waiting for a person to decide on the merge."
             exit 0
           fi
           rounds="$(git log --oneline origin/main..HEAD --grep='^Review round' | wc -l | tr -d ' ')"
           if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
-            gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo still reports $count finding(s) after $rounds fix rounds. Stopping here for a person."
+            say "Factory: Qodo still reports $count finding(s) after $rounds fix rounds. Stopping here for a person."
             to_person
             exit 0
           fi
           REVIEW_FILE=.factory/review.html REVIEW_COUNT="$count" node .factory-trusted/factory/run-ticket.mjs
           if [ "$(cat .factory/status)" != "ok" ]; then
-            gh pr comment "$PR" -R "$REPO" --body-file .factory/log.md
+            say_file .factory/log.md
             to_person
             exit 0
           fi
@@ -131,11 +137,11 @@ jobs:
           if [ -s .factory/files.txt ]; then git --literal-pathspecs add --pathspec-from-file=.factory/files.txt; fi
           extra="$(git status --porcelain --untracked-files=all -- . ':!.factory' | grep -v '^[AM]  ' || true)"
           if [ -n "$extra" ]; then
-            gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: files changed that the runner did not write. Nothing was pushed.\n\n```\n%s\n```' "$extra")"
+            say "$(printf 'Factory: files changed that the runner did not write. Nothing was pushed.\n\n```\n%s\n```' "$extra")"
             to_person
             exit 0
           fi
-          gh pr comment "$PR" -R "$REPO" --body-file .factory/pr-body.md
+          say_file .factory/pr-body.md
           if git diff --cached --quiet; then exit 0; fi
           git config user.name "hanadul-factory"
           git config user.email "hanadul-factory@users.noreply.github.com"
