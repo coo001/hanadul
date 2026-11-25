@@ -10,6 +10,71 @@ export function checkPaths(paths) {
   return bad.length ? `These paths are outside what the factory may write: ${bad.map((p) => JSON.stringify(p)).join(', ')}` : '';
 }
 
+export function isAllowed(path) {
+  return checkPaths([path]) === '';
+}
+
+// Which files the model sees first when they don't all fit.
+const CONTEXT_ORDER = ['src/', 'bin/', 'test/', 'web/', 'docs/', 'README.md'];
+
+/**
+ * Pick the files whose full contents go into the prompt, in CONTEXT_ORDER, until
+ * their total length would pass budget. The rest are only named.
+ * @param {{path: string, content: string}[]} files
+ * @returns {{shown: {path: string, content: string}[], notShown: string[]}}
+ */
+export function selectContext(files, budget) {
+  const rank = (p) => CONTEXT_ORDER.findIndex((prefix) => p.startsWith(prefix));
+  const sorted = [...files].sort((a, b) => rank(a.path) - rank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const shown = [];
+  const notShown = [];
+  let used = 0;
+  for (const f of sorted) {
+    if (used + f.content.length <= budget) {
+      shown.push(f);
+      used += f.content.length;
+    } else {
+      notShown.push(f.path);
+    }
+  }
+  return { shown, notShown };
+}
+
+/**
+ * The model may only replace an existing file it was shown in full.
+ * @param {Set<string>} shown paths whose full contents were in the prompt
+ * @param {(path: string) => boolean} exists whether the path already existed before the runner wrote it
+ * @returns {string} a description of the problem, or ''
+ */
+export function checkOverwrites(paths, shown, exists) {
+  const bad = [...new Set(paths)].filter((p) => !shown.has(p) && exists(p));
+  return bad.length ? `These files already exist but their full contents were not shown, so they may not be replaced: ${bad.map((p) => JSON.stringify(p)).join(', ')}` : '';
+}
+
+const DECISIONS = new Set(['fixed', 'not a problem']);
+
+/**
+ * In review mode the reply must answer every finding of the review.
+ * @param {{files: unknown[], findings: {finding: string, decision: string, reason: unknown}[]}} reply from parseReply
+ * @param {number} expected the number of findings in the review
+ * @returns {string} a description of the problem, or ''
+ */
+export function checkReviewReply(reply, expected) {
+  const { files, findings } = reply;
+  if (findings.length !== expected) {
+    return `The review has ${expected} finding(s) but the reply answers ${findings.length}. Give exactly one "findings" entry per review finding, each with "finding", "decision" and "reason" strings.`;
+  }
+  const bad = [];
+  findings.forEach((f, i) => {
+    if (f.finding.trim() === '') bad.push(`entry ${i + 1} has an empty "finding"`);
+    if (!DECISIONS.has(f.decision)) bad.push(`entry ${i + 1} has decision ${JSON.stringify(f.decision)}; use "fixed" or "not a problem"`);
+    if (typeof f.reason !== 'string' || f.reason.trim() === '') bad.push(`entry ${i + 1} needs a "reason"`);
+  });
+  if (bad.length) return `The review findings are not all answered: ${bad.join('; ')}.`;
+  if (files.length === 0 && findings.some((f) => f.decision === 'fixed')) return 'A finding is marked "fixed" but the reply changes no files.';
+  return '';
+}
+
 // Top-level entries of the checkout that are not copied into the checks' temp dir.
 const NOT_COPIED = new Set(['.git', '.factory', '.factory-trusted']);
 
@@ -64,7 +129,7 @@ export function countFindings(reviewComment) {
   return counts.reduce((sum, m) => sum + Number(m[2]), 0);
 }
 
-export function buildPrompt({ issue, review, rules, tracked, sources, exampleTest }) {
+export function buildPrompt({ issue, review, reviewCount, rules, tracked, shown, notShown }) {
   const system = [
     'You are the coding agent of a small software factory. You implement exactly one ticket.',
     'Follow the project rules below. Do only what the ticket asks; anything else belongs in a new ticket.',
@@ -74,6 +139,7 @@ export function buildPrompt({ issue, review, rules, tracked, sources, exampleTes
     '  "criteria": [{ "text": "an acceptance criterion copied from the ticket", "evidence": "the test name that checks it" }],',
     '  "findings": [{ "finding": "...", "decision": "fixed | not a problem", "reason": "what the code shows" }] }',
     'Give every changed or new file in full. You may write under src/, test/, bin/, docs/, web/ and README.md only.',
+    'You may replace an existing file only if its full contents are shown below. Files listed as not shown must not be written.',
     'Tests use node:test and node:assert/strict. Expected Korean readings in tests are written by hand as literal strings.',
     '"findings" is only for review mode; otherwise leave it empty.',
   ].join('\n');
@@ -81,10 +147,10 @@ export function buildPrompt({ issue, review, rules, tracked, sources, exampleTes
     `# Ticket #${issue.number}: ${issue.title}`, issue.body,
     '# Project rules (AGENTS.md)', rules,
     '# Files in the repository', tracked.join('\n'),
-    ...sources.map((s) => `# ${s.path}\n${s.content}`),
-    '# Style example from test/native.test.js', exampleTest,
+    ...shown.map((s) => `# ${s.path} (full contents)\n${s.content}`),
+    ...(notShown.length ? ['# Not shown (over the size budget; do not write these)', notShown.join('\n')] : []),
     ...(review ? ['# Code review of the current change', review,
-      'Check each finding against the code above. Fix the ones that are real. For the others, say why they are not a problem. If nothing needs to change, return "files": [].'] : []),
+      `The review has ${reviewCount} finding(s). Check each one against the code above and give exactly one "findings" entry for each. Fix the ones that are real. For the others, say why they are not a problem. If nothing needs to change, return "files": [].`] : []),
   ].join('\n\n');
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
