@@ -13,12 +13,17 @@ before I merge it.
 
 ## Status
 
-Sino-Korean readings for 0 to 9999 work, from code and from the command line:
+Sino-Korean readings work from 0 to 9999조 9999억 9999만 9999, from code and
+from the command line:
 
     $ node bin/hanadul.js 1234
     천이백삼십사
+    $ node bin/hanadul.js 12345678
+    천이백삼십사만 오천육백칠십팔
 
-A leading 1 is silent before 십, 백 and 천, so 10 is "십" and 1100 is "천백".
+A leading 1 is silent before 십, 백, 천 and 만, so 10 is "십" and 10000 is "만".
+억 and 조 keep it: 100000000 is "일억". Groups of four digits are separated by a
+space, the way the Korean spelling rules write them.
 
 ## Planned
 
