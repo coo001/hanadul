@@ -4,7 +4,8 @@ name: factory-review
 # runner check the findings and fix the real ones, at most twice. Never merges.
 on:
   issue_comment:
-    types: [created]
+    # Qodo edits its summary comment when it reviews again, so edits count too.
+    types: [created, edited]
 
 permissions:
   contents: write
@@ -86,28 +87,32 @@ jobs:
           count="$(node -e "import('./.factory-trusted/factory/lib.mjs').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
           if [ "$count" = "null" ]; then echo "Not a review summary."; exit 0; fi
           # The factory never changes its own rules, code or workflows.
-          own="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" -- factory .github AGENTS.md)"
+          own="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" -- factory .github AGENTS.md .pr_agent.toml)"
           if [ -n "$own" ]; then
-            gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: this branch changes factory/, .github/ or AGENTS.md compared with %s. Stopping here for a person.\n\n```\n%s\n```' "$DEFAULT_BRANCH" "$own")"
+            gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: this branch changes factory/, .github/, AGENTS.md or .pr_agent.toml compared with %s. Stopping here for a person.\n\n```\n%s\n```' "$DEFAULT_BRANCH" "$own")"
             to_person
             exit 0
           fi
+          head="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)"
+          # A review counts only for the commit it saw. Use the later of the comment's
+          # created and updated times (Qodo edits its comment when it reviews again).
+          reviewed="$(date -d "$COMMENT_CREATED" +%s)"
+          if [ -n "$COMMENT_UPDATED" ]; then
+            updated="$(date -d "$COMMENT_UPDATED" +%s)"
+            if [ "$updated" -gt "$reviewed" ]; then reviewed="$updated"; fi
+          fi
+          committed="$(git log -1 --format=%ct HEAD)"
+          # An older review (or the branch moving during this run) is ignored without a
+          # comment: the factory asks Qodo to review every commit it pushes.
+          if [ "$head" != "$(git rev-parse HEAD)" ] || [ "$committed" -gt "$reviewed" ]; then
+            echo "This review predates the latest commit ${head:0:7}; waiting for a review of that commit."
+            exit 0
+          fi
           if [ "$count" = "0" ]; then
-            head="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid)"
-            # The review counts for the commit it saw. Use the later of the comment's
-            # created and updated times (Qodo may edit its comment).
-            reviewed="$(date -d "$COMMENT_CREATED" +%s)"
-            if [ -n "$COMMENT_UPDATED" ]; then
-              updated="$(date -d "$COMMENT_UPDATED" +%s)"
-              if [ "$updated" -gt "$reviewed" ]; then reviewed="$updated"; fi
-            fi
-            committed="$(git log -1 --format=%ct HEAD)"
-            # If the PR head is not the checked-out commit, the branch moved after this run started.
-            if [ "$head" != "$(git rev-parse HEAD)" ] || [ "$committed" -gt "$reviewed" ]; then
-              gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo's clean review predates the latest commit (${head:0:7}), so it is not reported as clean. Waiting for a review of that commit."
-              exit 0
-            fi
-            gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo reported no findings on ${head:0:7}. Tests passed in the runner. Waiting for a person to decide on the merge."
+            clean="Factory: Qodo reported no findings on ${head:0:7}."
+            # Qodo may edit the same clean summary again; report it once per commit.
+            if gh pr view "$PR" -R "$REPO" --json comments --jq '.comments[].body' | grep -qF "$clean"; then exit 0; fi
+            gh pr comment "$PR" -R "$REPO" --body "$clean Tests passed in the runner. Waiting for a person to decide on the merge."
             exit 0
           fi
           rounds="$(git log --oneline origin/main..HEAD --grep='^Review round' | wc -l | tr -d ' ')"
@@ -136,3 +141,5 @@ jobs:
           git config user.email "hanadul-factory@users.noreply.github.com"
           git commit -m "Review round $((rounds + 1)): fix confirmed findings"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:$BRANCH"
+          # Qodo does not review pushes on its own, so ask for a review of the new commit.
+          gh pr comment "$PR" -R "$REPO" --body "/agentic_review"
