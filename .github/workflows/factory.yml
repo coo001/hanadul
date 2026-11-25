@@ -14,7 +14,6 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  models: read
 
 # One ticket at a time.
 concurrency:
@@ -25,7 +24,7 @@ jobs:
   ticket:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready-for-agent'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       ISSUE: ${{ github.event.issue.number || inputs.issue }}
       REPO: ${{ github.repository }}
@@ -39,8 +38,11 @@ jobs:
           node-version: 22
       - name: Create the unprivileged user that runs the checks
         run: id -u "$FACTORY_TEST_USER" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$FACTORY_TEST_USER"
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.318
       - name: Work on the ticket
         env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node factory/run-ticket.mjs
       - name: Open a PR for review

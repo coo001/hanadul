@@ -19,10 +19,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, cpSync, rmSync, rmdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList, isAllowed, selectContext, checkOverwrites, checkReviewReply } from './lib.mjs';
+import { toClaudePrompt, extractJson, checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList, isAllowed, selectContext, checkOverwrites, checkReviewReply } from './lib.mjs';
 
 const { ISSUE, REPO, GH_TOKEN, REVIEW_FILE, REVIEW_COUNT, FACTORY_STUB } = process.env;
-const MODEL = process.env.FACTORY_MODEL || 'openai/gpt-4.1';
+const MODEL = process.env.FACTORY_MODEL || 'sonnet'; // a Claude Code model name or alias
+// Each attempt is at most one model call plus one test run (120 s). Three attempts
+// must end well inside the workflow's 25-minute job limit so finish() always runs.
+const MODEL_TIMEOUT_MS = 240_000;
 const MAX_ATTEMPTS = Number(process.env.FACTORY_MAX_ATTEMPTS || 3); // first try + 2 retries
 const CONTEXT_BUDGET = 60_000; // characters of file contents in the prompt
 const log = [];
@@ -62,18 +65,33 @@ async function askModel(messages, attempt) {
     const replies = JSON.parse(readFileSync(FACTORY_STUB, 'utf8'));
     return replies[Math.min(attempt - 1, replies.length - 1)];
   }
-  const res = await fetch('https://models.github.ai/inference/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${GH_TOKEN}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ model: MODEL, messages, temperature: 0, response_format: { type: 'json_object' } }),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`model request failed with HTTP ${res.status}: ${text.slice(0, 300)}`);
+  // Claude Code with every tool turned off: it can only answer in text, and the
+  // runner itself writes the files. It signs in with CLAUDE_CODE_OAUTH_TOKEN
+  // (a subscription token from `claude setup-token`) and gets no other secret.
+  const { system, prompt } = toClaudePrompt(messages);
+  // Claude Code reads settings, hooks, MCP servers and CLAUDE.md from the folder
+  // it runs in. The checkout may be an untrusted PR branch, so it runs in an
+  // empty folder of its own and loads no project or local settings.
+  const cwd = mkdtempSync(join(tmpdir(), 'factory-model-'));
+  let r;
   try {
-    return JSON.parse(text).choices[0].message.content;
-  } catch {
-    throw new Error(`model reply was not the expected JSON: ${text.slice(0, 300)}`);
+    writeFileSync(join(cwd, 'system-prompt.md'), system);
+    r = spawnSync('claude', ['-p', '--output-format', 'json', '--tools', '', '--model', MODEL, '--system-prompt-file', join(cwd, 'system-prompt.md'), '--setting-sources', 'user', '--strict-mcp-config', '--no-session-persistence'], {
+      cwd, input: prompt, encoding: 'utf8', timeout: MODEL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
+      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '/tmp', CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '' },
+    });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
+  if (r.error) throw new Error(`could not run claude: ${r.error.message}`);
+  let out;
+  try {
+    out = JSON.parse(r.stdout);
+  } catch {
+    throw new Error(`claude did not return JSON (exit ${r.status}): ${(r.stdout + r.stderr).slice(0, 300)}`);
+  }
+  if (out.is_error || typeof out.result !== 'string') throw new Error(`claude reported an error: ${String(out.result ?? out.subtype).slice(0, 300)}`);
+  return extractJson(out.result);
 }
 
 // Model-written code runs here, so it gets no tokens and works on a copy:

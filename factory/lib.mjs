@@ -160,3 +160,22 @@ export function buildPrompt({ issue, review, reviewCount, rules, tracked, shown,
   ].join('\n\n');
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
+
+/**
+ * Turn chat messages into what `claude -p` takes: one system prompt and one prompt.
+ * Earlier turns (a rejected reply and the feedback on it) are written out in order.
+ */
+export function toClaudePrompt(messages) {
+  const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+  const turns = messages.filter((m) => m.role !== 'system');
+  if (turns.length === 1) return { system, prompt: turns[0].content };
+  const label = { user: 'Request', assistant: 'Your earlier reply' };
+  return { system, prompt: turns.map((m) => `## ${label[m.role] ?? m.role}\n\n${m.content}`).join('\n\n') };
+}
+
+/** The JSON object in a model reply, without Markdown code fences or text around it. */
+export function extractJson(text) {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  return start === -1 || end < start ? text.trim() : text.slice(start, end + 1);
+}

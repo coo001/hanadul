@@ -16,8 +16,10 @@ an issue number.) One ticket runs at a time.
 2. Sends the ticket, `AGENTS.md` and the full contents of the tracked files
    under `src/`, `bin/`, `test/`, `web/`, `docs/` and `README.md` (in that
    order, up to 60,000 characters; files past that are only named) to a model
-   through GitHub Models, using the workflow's own token. No API key is stored
-   in the repository.
+   through Claude Code (`claude -p` with every tool turned off, so it can only
+   answer in text). It signs in with the `CLAUDE_CODE_OAUTH_TOKEN` repository
+   secret, a subscription token from `claude setup-token`; no API key is used.
+   Only that step gets the secret, and the checks never see it.
 3. Refuses any file outside `src/`, `test/`, `bin/`, `docs/`, `web/` and
    `README.md`. The runner cannot edit `AGENTS.md`, `factory/`, the workflows
    or `package.json`. It also refuses to replace an existing file the model was
@@ -75,6 +77,9 @@ the model writes are untrusted code.
   but not write. The runner lists every file it wrote in `.factory/files.txt`;
   the workflows stage only those, and if `git status` shows any other change
   they comment, add `needs-human` and push nothing.
+- Claude Code runs in an empty temporary folder with project and local
+  settings off, so a branch's `.claude/` settings, hooks, MCP servers or
+  `CLAUDE.md` never load while it holds `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ## What stays with a person
 
@@ -83,18 +88,21 @@ Merging. Writing tickets. Anything labelled `needs-human`. Changes to
 
 ## Limits
 
-- The free GitHub Models tier caps request size, so this only suits small
-  tickets in a small codebase.
+- Each run uses the subscription's Claude usage, so a busy day of tickets can
+  hit the plan's limits. The prompt is capped at 60,000 characters of files, so
+  this suits small tickets in a small codebase.
 - A PR opened with the workflow token does not start other workflows. The
   tests are run inside the runner before the PR is opened.
 - Passing tests and a clean review do not show the ticket is done. The model
   wrote both the code and its tests.
 
-## Why GitHub Actions and GitHub Models
+## Why GitHub Actions and Claude Code
 
-The trigger has to work with no machine of mine switched on, and cost nothing.
-A scheduled job on a laptop needs the laptop awake and a paid agent login on
-it. Actions on a public repository and the Models free tier need neither.
+The trigger has to work with no machine of mine switched on. A scheduled job on
+a laptop needs the laptop awake. Actions on a public repository cost nothing.
+The runner first used GitHub Models with the workflow token, but GitHub retired
+GitHub Models on 30 July 2026 (the endpoint now answers HTTP 200 with a plain
+"OK"), so it calls Claude Code on the subscription that is already paid for.
 
 ## Try the runner locally
 

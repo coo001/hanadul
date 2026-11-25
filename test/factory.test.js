@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkPaths, parseReply, countFindings, stripHtml, isCopied, testCommand, fileList, selectContext, checkOverwrites, checkReviewReply, buildPrompt } from '../factory/lib.mjs';
+import { toClaudePrompt, extractJson, checkPaths, parseReply, countFindings, stripHtml, isCopied, testCommand, fileList, selectContext, checkOverwrites, checkReviewReply, buildPrompt } from '../factory/lib.mjs';
 
 test('the factory may write code, tests and docs', () => {
   assert.equal(checkPaths(['src/digits.js', 'test/digits.test.js', 'README.md', 'docs/spec.md']), '');
@@ -113,4 +113,19 @@ test('checkReviewReply does not count files sent back unchanged as a fix', () =>
   const reply = { files: [{ path: 'src/a.js', content: 'x\n' }], findings: [{ finding: 'f', decision: 'fixed', reason: 'r' }] };
   assert.match(checkReviewReply(reply, 1, () => true), /changes no files/);
   assert.equal(checkReviewReply(reply, 1, () => false), '');
+});
+
+test('toClaudePrompt keeps the system prompt apart and writes out earlier turns', () => {
+  const first = [{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }];
+  assert.deepEqual(toClaudePrompt(first), { system: 'S', prompt: 'U' });
+  const retry = [...first, { role: 'assistant', content: '{"a":1}' }, { role: 'user', content: 'That did not pass.' }];
+  const { system, prompt } = toClaudePrompt(retry);
+  assert.equal(system, 'S');
+  assert.match(prompt, /^## Request\n\nU\n\n## Your earlier reply\n\n\{"a":1\}\n\n## Request\n\nThat did not pass\.$/);
+});
+
+test('extractJson takes the object out of code fences and surrounding text', () => {
+  assert.equal(extractJson('```json\n{"a":{"b":1}}\n```'), '{"a":{"b":1}}');
+  assert.equal(extractJson('Here it is: {"a":1} done'), '{"a":1}');
+  assert.equal(extractJson('OK'), 'OK');
 });
