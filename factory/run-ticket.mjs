@@ -7,22 +7,30 @@
 //
 // With REVIEW_FILE set, the model also gets the text of a code review and is
 // asked to check each finding against the code before changing anything.
-// Result: .factory/status ("ok" or "stuck"), .factory/pr-body.md, .factory/log.md
+// Result: .factory/status ("ok" or "stuck"), .factory/pr-body.md, .factory/log.md,
+// .factory/files.txt (every path the runner wrote, one per line; the workflows
+// stage only these).
+//
+// Repository files are read and written relative to the working directory, so
+// the workflow can run a trusted copy of this script against another checkout.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { checkPaths, parseReply, buildPrompt, stripHtml } from './lib.mjs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, cpSync, rmSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { tmpdir } from 'node:os';
+import { checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList } from './lib.mjs';
 
 const { ISSUE, REPO, GH_TOKEN, REVIEW_FILE, FACTORY_STUB } = process.env;
 const MODEL = process.env.FACTORY_MODEL || 'openai/gpt-4.1';
 const MAX_ATTEMPTS = Number(process.env.FACTORY_MAX_ATTEMPTS || 3); // first try + 2 retries
 const log = [];
 const note = (line) => { log.push(line); console.log(line); };
+const written = new Set();
 
 function finish(status, prBody = '') {
   mkdirSync('.factory', { recursive: true });
   writeFileSync('.factory/status', status);
   writeFileSync('.factory/pr-body.md', prBody);
+  writeFileSync('.factory/files.txt', status === 'ok' ? fileList([...written]) : '');
   writeFileSync('.factory/log.md', log.join('\n') + '\n');
   process.exit(0);
 }
@@ -52,12 +60,25 @@ async function askModel(messages, attempt) {
   }
 }
 
-// Model-written code runs here, so it gets no tokens.
+// Model-written code runs here, so it gets no tokens and works on a copy:
+// nothing the tests write reaches the real checkout. With FACTORY_TEST_USER set
+// (CI) it also runs as that user, who cannot read this process's environment.
 function runChecks() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (/TOKEN|SECRET|KEY/i.test(key)) delete env[key];
-  const r = spawnSync('npm', ['test'], { encoding: 'utf8', env, timeout: 120_000 });
-  return { ok: r.status === 0, output: (r.stdout + r.stderr).slice(-3000) };
+  const testUser = process.env.FACTORY_TEST_USER;
+  const root = process.cwd();
+  const dir = mkdtempSync(join(tmpdir(), 'factory-checks-'));
+  try {
+    cpSync(root, dir, { recursive: true, filter: (src) => isCopied(relative(root, src)) });
+    // Readable by the test user, writable only by the runner.
+    if (testUser) execFileSync('chmod', ['-R', 'a+rX,go-w', dir]);
+    const { cmd, args, env } = testCommand(process.env, testUser);
+    const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', env, timeout: 120_000 });
+    // Nothing started by the tests may outlive them (it could watch later commands).
+    if (testUser) spawnSync('sudo', ['-n', 'pkill', '-KILL', '-u', testUser]);
+    return { ok: r.status === 0, output: (r.stdout + r.stderr).slice(-3000) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const tracked = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).trim().split('\n');
@@ -87,6 +108,7 @@ for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     for (const f of reply.files) {
       mkdirSync(dirname(f.path), { recursive: true });
       writeFileSync(f.path, f.content.endsWith('\n') ? f.content : f.content + '\n');
+      written.add(f.path);
     }
     const checks = runChecks();
     note(`Attempt ${attempt}: wrote ${reply.files.map((f) => f.path).join(', ') || 'nothing'}; npm test ${checks.ok ? 'passed' : 'failed'}.`);
