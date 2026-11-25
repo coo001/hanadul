@@ -10,7 +10,6 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  models: read
 
 concurrency:
   group: factory
@@ -63,9 +62,12 @@ jobs:
       - name: Create the unprivileged user that runs the checks
         if: steps.pr.outputs.branch
         run: id -u "$FACTORY_TEST_USER" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$FACTORY_TEST_USER"
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.318
       - name: Read the review and act on it
         if: steps.pr.outputs.branch
         env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           COMMENT: ${{ github.event.comment.body }}
           COMMENT_CREATED: ${{ github.event.comment.created_at }}
