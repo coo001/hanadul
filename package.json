@@ -1,0 +1,10 @@
+{
+  "name": "hanadul",
+  "version": "0.1.0",
+  "description": "Read numbers aloud in Korean: a tiny library, CLI and web page for Korean learners.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "hanadul": "bin/hanadul.js" },
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test" }
+}
