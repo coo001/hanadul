@@ -13,16 +13,22 @@ an issue number.) One ticket runs at a time.
 `factory/run-ticket.mjs`:
 
 1. Reads the issue with `gh issue view`.
-2. Sends the ticket, `AGENTS.md` and the current source files to a model
+2. Sends the ticket, `AGENTS.md` and the full contents of the tracked files
+   under `src/`, `bin/`, `test/`, `web/`, `docs/` and `README.md` (in that
+   order, up to 60,000 characters; files past that are only named) to a model
    through GitHub Models, using the workflow's own token. No API key is stored
    in the repository.
 3. Refuses any file outside `src/`, `test/`, `bin/`, `docs/`, `web/` and
    `README.md`. The runner cannot edit `AGENTS.md`, `factory/`, the workflows
-   or `package.json`.
+   or `package.json`. It also refuses to replace an existing file the model was
+   not shown in full.
 4. Writes the files and runs `npm test` on a copy of the working tree, because
    this is where model-written code executes. See "Isolation".
 5. If the reply is malformed, a path is refused or a test fails, sends the
-   problem back and tries again. Three attempts in total.
+   problem back and tries again. Three attempts in total. If all three fail, it
+   undoes only what it wrote: tracked files are restored, new files and the
+   directories it created for them (if now empty) are removed. Nothing else in
+   the working tree is touched.
 
 Then the workflow either:
 
@@ -35,10 +41,18 @@ Then the workflow either:
 Qodo reviews the PR. `.github/workflows/factory-review.yml` reads Qodo's
 comment:
 
-- no findings: it says so on the PR and waits;
-- findings: the runner gets the review text, checks each finding against the
-  code, fixes the ones it confirms and explains the ones it rejects. After two
-  fix rounds it stops and adds `needs-human`.
+- no findings: it says so on the PR and waits. If the PR head has a newer
+  commit than the review comment (created or last edited), it says the review
+  predates that commit instead, and waits for a new review;
+- findings: the runner gets the review text and the number of findings,
+  checks each finding against the code, fixes the ones it confirms and
+  explains the ones it rejects. The reply must answer every finding with
+  `fixed` or `not a problem` and a reason, and change at least one file if
+  anything is `fixed`; otherwise the attempt counts as failed. After two fix
+  rounds it stops.
+
+Whenever the review workflow stops for a person, it adds `needs-human` to the
+PR and moves the ticket from `in-review` to `needs-human`.
 
 ## Isolation
 
