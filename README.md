@@ -25,6 +25,10 @@ A leading 1 is silent before 십, 백, 천 and 만, so 10 is "십" and 10000 is 
 억 and 조 keep it: 100000000 is "일억". Groups of four digits are separated by a
 space, the way the Korean spelling rules write them.
 
+Native Korean numerals work from 1 to 99 in code (`readNative` in
+`src/native.js`): 21 is "스물하나". There is no native zero, and from 100 up
+Korean uses Sino-Korean, so those throw.
+
 ## Planned
 
 - Sino-Korean and native Korean numerals
