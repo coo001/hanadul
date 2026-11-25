@@ -24,7 +24,7 @@ jobs:
   ticket:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready-for-agent'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       ISSUE: ${{ github.event.issue.number || inputs.issue }}
       REPO: ${{ github.repository }}
