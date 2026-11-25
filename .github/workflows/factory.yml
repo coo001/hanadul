@@ -1,0 +1,62 @@
+name: factory
+
+# A ticket labelled "ready-for-agent" starts the factory. No session, no prompt.
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to work on
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  models: read
+
+# One ticket at a time.
+concurrency:
+  group: factory
+  cancel-in-progress: false
+
+jobs:
+  ticket:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready-for-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ISSUE: ${{ github.event.issue.number || inputs.issue }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Work on the ticket
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node factory/run-ticket.mjs
+      - name: Open a PR for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat .factory/log.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(cat .factory/status)" != "ok" ]; then
+            gh issue comment "$ISSUE" -R "$REPO" --body-file .factory/log.md
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label needs-human
+            exit 0
+          fi
+          branch="factory/issue-$ISSUE"
+          title="$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)"
+          git config user.name "hanadul-factory"
+          git config user.email "hanadul-factory@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A -- . ':!.factory'
+          git commit -m "$title" -m "Ticket #$ISSUE, written by the factory runner."
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+          gh pr create -R "$REPO" --head "$branch" --base main --title "$title" --body-file .factory/pr-body.md
+          gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label in-review

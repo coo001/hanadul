@@ -1,0 +1,80 @@
+name: factory-review
+
+# When Qodo's review lands on a factory PR: report a clean review, or let the
+# runner check the findings and fix the real ones, at most twice. Never merges.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  models: read
+
+concurrency:
+  group: factory
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: github.event.issue.pull_request && github.event.comment.user.login == 'qodo-code-review[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PR: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      MAX_ROUNDS: 2
+    steps:
+      - name: Find the PR branch and its ticket
+        id: pr
+        run: |
+          branch="$(gh pr view "$PR" -R "$REPO" --json headRefName --jq .headRefName)"
+          case "$branch" in factory/issue-*) ;; *) echo "Not a factory PR."; exit 0 ;; esac
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "issue=${branch#factory/issue-}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.pr.outputs.branch
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.pr.outputs.branch
+        with:
+          node-version: 22
+      - name: Read the review and act on it
+        if: steps.pr.outputs.branch
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+          ISSUE: ${{ steps.pr.outputs.issue }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          mkdir -p .factory && printf '%s' "$COMMENT" > .factory/review.html
+          count="$(node -e "import('./factory/lib.mjs').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
+          sha="$(git rev-parse --short HEAD)"
+          if [ "$count" = "null" ]; then echo "Not a review summary."; exit 0; fi
+          if [ "$count" = "0" ]; then
+            gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo reported no findings on $sha. Tests passed in the runner. Waiting for a person to decide on the merge."
+            exit 0
+          fi
+          rounds="$(git log --oneline origin/main..HEAD --grep='^Review round' | wc -l | tr -d ' ')"
+          if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
+            gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo still reports $count finding(s) after $rounds fix rounds. Stopping here for a person."
+            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            exit 0
+          fi
+          REVIEW_FILE=.factory/review.html node factory/run-ticket.mjs
+          if [ "$(cat .factory/status)" != "ok" ]; then
+            gh pr comment "$PR" -R "$REPO" --body-file .factory/log.md
+            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            exit 0
+          fi
+          gh pr comment "$PR" -R "$REPO" --body-file .factory/pr-body.md
+          if [ -z "$(git status --porcelain -- . ':!.factory')" ]; then exit 0; fi
+          git config user.name "hanadul-factory"
+          git config user.email "hanadul-factory@users.noreply.github.com"
+          git add -A -- . ':!.factory'
+          git commit -m "Review round $((rounds + 1)): fix confirmed findings"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:$BRANCH"
