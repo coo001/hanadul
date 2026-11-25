@@ -13,7 +13,12 @@ before I merge it.
 
 ## Status
 
-Nothing works yet. The first ticket is Sino-Korean readings for 0 to 9999.
+Sino-Korean readings for 0 to 9999 work, from code and from the command line:
+
+    $ node bin/hanadul.js 1234
+    천이백삼십사
+
+A leading 1 is silent before 십, 백 and 천, so 10 is "십" and 1100 is "천백".
 
 ## Planned
 
