@@ -23,6 +23,9 @@ import { toClaudePrompt, extractJson, checkPaths, parseReply, buildPrompt, strip
 
 const { ISSUE, REPO, GH_TOKEN, REVIEW_FILE, REVIEW_COUNT, FACTORY_STUB } = process.env;
 const MODEL = process.env.FACTORY_MODEL || 'sonnet'; // a Claude Code model name or alias
+// Each attempt is at most one model call plus one test run (120 s). Three attempts
+// must end well inside the workflow's 25-minute job limit so finish() always runs.
+const MODEL_TIMEOUT_MS = 240_000;
 const MAX_ATTEMPTS = Number(process.env.FACTORY_MAX_ATTEMPTS || 3); // first try + 2 retries
 const CONTEXT_BUDGET = 60_000; // characters of file contents in the prompt
 const log = [];
@@ -69,7 +72,7 @@ async function askModel(messages, attempt) {
   mkdirSync('.factory', { recursive: true });
   writeFileSync('.factory/system-prompt.md', system);
   const r = spawnSync('claude', ['-p', '--output-format', 'json', '--tools', '', '--model', MODEL, '--system-prompt-file', '.factory/system-prompt.md', '--no-session-persistence'], {
-    input: prompt, encoding: 'utf8', timeout: 600_000, maxBuffer: 32 * 1024 * 1024,
+    input: prompt, encoding: 'utf8', timeout: MODEL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
     env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '/tmp', CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '' },
   });
   if (r.error) throw new Error(`could not run claude: ${r.error.message}`);
