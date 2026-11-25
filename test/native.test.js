@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readNative } from '../src/native.js';
+import { readSino } from '../src/sino.js';
 
 // Expected readings are written by hand (AGENTS.md rule 1).
 const CASES = [
@@ -53,6 +54,7 @@ test('only the ones 1 to 4 and exactly 20 change in front of a counter', () => {
 
 test('the plain reading is unchanged when the option is off or missing', () => {
   assert.equal(readNative(3), '셋');
+  assert.equal(readNative(3, undefined), '셋');
   assert.equal(readNative(3, {}), '셋');
   assert.equal(readNative(20, { beforeCounter: false }), '스물');
 });
@@ -61,4 +63,38 @@ test('the counter form rejects the same inputs as the plain one', () => {
   for (const bad of [0, 100, 2.5]) {
     assert.throws(() => readNative(bad, { beforeCounter: true }), RangeError, String(bad));
   }
+});
+
+test('readNative(3, null) throws a RangeError naming readNative and the options', () => {
+  assert.throws(() => readNative(3, null), (e) => e instanceof RangeError && /readNative/.test(e.message) && /null/.test(e.message));
+});
+
+test('options that are not an object throw a RangeError showing the value', () => {
+  for (const [bad, shown] of [[3, '3'], ['x', 'x'], [true, 'true'], [[], '[]']]) {
+    assert.throws(
+      () => readNative(3, bad),
+      (e) => e instanceof RangeError && /readNative/.test(e.message) && e.message.includes(shown),
+      String(bad),
+    );
+  }
+});
+
+test('a beforeCounter that is not true or false throws a RangeError showing the value', () => {
+  for (const [bad, shown] of [['x', 'x'], [1, '1'], [null, 'null']]) {
+    assert.throws(
+      () => readNative(3, { beforeCounter: bad }),
+      (e) => e instanceof RangeError && /readNative/.test(e.message) && e.message.includes(shown),
+      String(bad),
+    );
+  }
+});
+
+test('null in every argument position gives a RangeError', () => {
+  assert.throws(() => readNative(null), RangeError);
+  assert.throws(() => readNative(null, null), RangeError);
+  assert.throws(() => readNative(3, null), RangeError);
+});
+
+test('readSino(null) throws a RangeError', () => {
+  assert.throws(() => readSino(null), RangeError);
 });
