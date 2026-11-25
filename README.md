@@ -28,6 +28,8 @@ space, the way the Korean spelling rules write them.
 Native Korean numerals work from 1 to 99 in code (`readNative` in
 `src/native.js`): 21 is "스물하나". There is no native zero, and from 100 up
 Korean uses Sino-Korean, so those throw.
+With `{ beforeCounter: true }` it gives the form used in front of a counter:
+3 is "세" (세 개), 20 is "스무" (스무 살), 21 is "스물한".
 
 ## Planned
 
