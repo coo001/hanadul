@@ -50,6 +50,14 @@ test('rejects input outside the range', () => {
   }
 });
 
+test('null gives a RangeError naming readSino, not a TypeError', () => {
+  assert.throws(() => readSino(null), (e) => {
+    assert.ok(e instanceof RangeError);
+    assert.match(e.message, /readSino/);
+    return true;
+  });
+});
+
 test('the command prints the reading', () => {
   const out = execFileSync('node', ['bin/hanadul.js', '1234'], { encoding: 'utf8' });
   assert.equal(out, '천이백삼십사\n');

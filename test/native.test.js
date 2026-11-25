@@ -53,6 +53,7 @@ test('only the ones 1 to 4 and exactly 20 change in front of a counter', () => {
 
 test('the plain reading is unchanged when the option is off or missing', () => {
   assert.equal(readNative(3), '셋');
+  assert.equal(readNative(3, undefined), '셋');
   assert.equal(readNative(3, {}), '셋');
   assert.equal(readNative(20, { beforeCounter: false }), '스물');
 });
@@ -61,4 +62,30 @@ test('the counter form rejects the same inputs as the plain one', () => {
   for (const bad of [0, 100, 2.5]) {
     assert.throws(() => readNative(bad, { beforeCounter: true }), RangeError, String(bad));
   }
+});
+
+test('a null options argument throws a RangeError naming readNative and the value', () => {
+  assert.throws(() => readNative(3, null), (e) => {
+    assert.ok(e instanceof RangeError);
+    assert.match(e.message, /readNative/);
+    assert.match(e.message, /got null/);
+    return true;
+  });
+});
+
+test('options that are not an object throw a RangeError naming readNative and the value', () => {
+  for (const [bad, shown] of [[3, 'got 3'], ['x', 'got "x"'], [true, 'got true']]) {
+    assert.throws(() => readNative(3, bad), (e) => {
+      assert.ok(e instanceof RangeError, String(bad));
+      assert.match(e.message, /readNative/);
+      assert.ok(e.message.includes(shown), e.message);
+      return true;
+    }, String(bad));
+  }
+});
+
+test('null in every argument position gives a RangeError, never a TypeError', () => {
+  assert.throws(() => readNative(null), RangeError);
+  assert.throws(() => readNative(null, null), RangeError);
+  assert.throws(() => readNative(3, null), RangeError);
 });
