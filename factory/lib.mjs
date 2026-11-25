@@ -10,6 +10,32 @@ export function checkPaths(paths) {
   return bad.length ? `These paths are outside what the factory may write: ${bad.map((p) => JSON.stringify(p)).join(', ')}` : '';
 }
 
+// Top-level entries of the checkout that are not copied into the checks' temp dir.
+const NOT_COPIED = new Set(['.git', '.factory', '.factory-trusted']);
+
+/** @param {string} relPath a path relative to the repository root */
+export function isCopied(relPath) {
+  return !NOT_COPIED.has(relPath.split(/[\\/]/)[0]);
+}
+
+/**
+ * How to run the checks on model-written code.
+ * With testUser (CI), npm test runs as that user with an empty environment, so it
+ * cannot read this process's environment through /proc. Without it (local runs),
+ * secrets are only removed from the child's environment; that is not isolation.
+ */
+export function testCommand(env, testUser) {
+  if (testUser) {
+    return { cmd: 'sudo', args: ['-n', '-u', testUser, 'env', '-i', `PATH=${env.PATH ?? ''}`, 'HOME=/tmp', 'npm', 'test'], env: { PATH: env.PATH ?? '' } };
+  }
+  return { cmd: 'npm', args: ['test'], env: Object.fromEntries(Object.entries(env).filter(([k]) => !/TOKEN|SECRET|KEY/i.test(k))) };
+}
+
+/** The contents of .factory/files.txt: each written path once, one per line. */
+export function fileList(paths) {
+  return [...new Set(paths)].sort().map((p) => `${p}\n`).join('');
+}
+
 /** Parse the model's JSON reply and insist on the fields the runner uses. */
 export function parseReply(text) {
   let data;
