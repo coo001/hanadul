@@ -179,3 +179,13 @@ export function extractJson(text) {
   const end = text.lastIndexOf('}');
   return start === -1 || end < start ? text.trim() : text.slice(start, end + 1);
 }
+
+/**
+ * The commit a Qodo summary comment reviewed. Qodo puts it in a hidden marker,
+ * `<!-- https://github.com/<owner>/<repo>/commit/<sha> -->`, and moves it each
+ * time it edits the comment for a newer commit. null when there is none.
+ */
+export function reviewedCommit(reviewComment) {
+  const m = /<!--\s*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/commit\/([0-9a-f]{40})\s*-->/.exec(reviewComment);
+  return m ? m[1] : null;
+}
