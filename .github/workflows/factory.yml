@@ -29,6 +29,7 @@ jobs:
     env:
       ISSUE: ${{ github.event.issue.number || inputs.issue }}
       REPO: ${{ github.repository }}
+      FACTORY_TEST_USER: factorytest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +37,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Create the unprivileged user that runs the checks
+        run: id -u "$FACTORY_TEST_USER" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$FACTORY_TEST_USER"
       - name: Work on the ticket
         env:
           GH_TOKEN: ${{ github.token }}
@@ -55,7 +58,14 @@ jobs:
           git config user.name "hanadul-factory"
           git config user.email "hanadul-factory@users.noreply.github.com"
           git checkout -b "$branch"
-          git add -A -- . ':!.factory'
+          # Stage only what the runner wrote; any other change stops the run.
+          if [ -s .factory/files.txt ]; then git --literal-pathspecs add --pathspec-from-file=.factory/files.txt; fi
+          extra="$(git status --porcelain --untracked-files=all -- . ':!.factory' | grep -v '^[AM]  ' || true)"
+          if [ -n "$extra" ]; then
+            gh issue comment "$ISSUE" -R "$REPO" --body "$(printf 'Factory: files changed that the runner did not write. Nothing was pushed.\n\n```\n%s\n```' "$extra")"
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label needs-human
+            exit 0
+          fi
           git commit -m "$title" -m "Ticket #$ISSUE, written by the factory runner."
           git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
           gh pr create -R "$REPO" --head "$branch" --base main --title "$title" --body-file .factory/pr-body.md
