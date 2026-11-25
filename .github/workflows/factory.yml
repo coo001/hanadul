@@ -68,5 +68,10 @@ jobs:
           fi
           git commit -m "$title" -m "Ticket #$ISSUE, written by the factory runner."
           git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
-          gh pr create -R "$REPO" --head "$branch" --base main --title "$title" --body-file .factory/pr-body.md
+          if ! gh pr create -R "$REPO" --head "$branch" --base main --title "$title" --body-file .factory/pr-body.md; then
+            # Usually the repository setting "Allow GitHub Actions to create and approve pull requests" is off.
+            gh issue comment "$ISSUE" -R "$REPO" --body "Factory: pushed \`$branch\` but could not open the PR. Check Settings > Actions > General > \"Allow GitHub Actions to create and approve pull requests\"."
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label needs-human
+            exit 0
+          fi
           gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label in-review
