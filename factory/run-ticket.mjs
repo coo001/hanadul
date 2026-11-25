@@ -19,10 +19,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, cpSync, rmSync, rmdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList, isAllowed, selectContext, checkOverwrites, checkReviewReply } from './lib.mjs';
+import { toClaudePrompt, extractJson, checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList, isAllowed, selectContext, checkOverwrites, checkReviewReply } from './lib.mjs';
 
 const { ISSUE, REPO, GH_TOKEN, REVIEW_FILE, REVIEW_COUNT, FACTORY_STUB } = process.env;
-const MODEL = process.env.FACTORY_MODEL || 'openai/gpt-4.1';
+const MODEL = process.env.FACTORY_MODEL || 'sonnet'; // a Claude Code model name or alias
 const MAX_ATTEMPTS = Number(process.env.FACTORY_MAX_ATTEMPTS || 3); // first try + 2 retries
 const CONTEXT_BUDGET = 60_000; // characters of file contents in the prompt
 const log = [];
@@ -62,18 +62,25 @@ async function askModel(messages, attempt) {
     const replies = JSON.parse(readFileSync(FACTORY_STUB, 'utf8'));
     return replies[Math.min(attempt - 1, replies.length - 1)];
   }
-  const res = await fetch('https://models.github.ai/inference/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${GH_TOKEN}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ model: MODEL, messages, temperature: 0, response_format: { type: 'json_object' } }),
+  // Claude Code with every tool turned off: it can only answer in text, and the
+  // runner itself writes the files. It signs in with CLAUDE_CODE_OAUTH_TOKEN
+  // (a subscription token from `claude setup-token`) and gets no other secret.
+  const { system, prompt } = toClaudePrompt(messages);
+  mkdirSync('.factory', { recursive: true });
+  writeFileSync('.factory/system-prompt.md', system);
+  const r = spawnSync('claude', ['-p', '--output-format', 'json', '--tools', '', '--model', MODEL, '--system-prompt-file', '.factory/system-prompt.md', '--no-session-persistence'], {
+    input: prompt, encoding: 'utf8', timeout: 600_000, maxBuffer: 32 * 1024 * 1024,
+    env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '/tmp', CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '' },
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`model request failed with HTTP ${res.status}: ${text.slice(0, 300)}`);
+  if (r.error) throw new Error(`could not run claude: ${r.error.message}`);
+  let out;
   try {
-    return JSON.parse(text).choices[0].message.content;
+    out = JSON.parse(r.stdout);
   } catch {
-    throw new Error(`model reply was not the expected JSON: ${text.slice(0, 300)}`);
+    throw new Error(`claude did not return JSON (exit ${r.status}): ${(r.stdout + r.stderr).slice(0, 300)}`);
   }
+  if (out.is_error || typeof out.result !== 'string') throw new Error(`claude reported an error: ${String(out.result ?? out.subtype).slice(0, 300)}`);
+  return extractJson(out.result);
 }
 
 // Model-written code runs here, so it gets no tokens and works on a copy:
