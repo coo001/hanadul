@@ -10,6 +10,7 @@ const BEFORE_COUNTER = { 하나: '한', 둘: '두', 셋: '세', 넷: '네' };
 function show(value) {
   if (typeof value === 'string') return JSON.stringify(value);
   try {
+    if (Array.isArray(value)) return JSON.stringify(value) ?? 'array';
     return String(value);
   } catch {
     return typeof value;
@@ -32,10 +33,14 @@ export function readNative(n, options = {}) {
   if (!Number.isInteger(n) || n < 1 || n > 99) {
     throw new RangeError(`readNative expects an integer from 1 to 99, got ${show(n)}`);
   }
-  if (typeof options !== 'object' || options === null) {
+  if (typeof options !== 'object' || options === null || Array.isArray(options)) {
     throw new RangeError(`readNative expects options to be an object, got ${show(options)}`);
   }
-  const beforeCounter = options.beforeCounter ?? false;
+  let beforeCounter = options.beforeCounter;
+  if (beforeCounter === undefined) beforeCounter = false;
+  if (typeof beforeCounter !== 'boolean') {
+    throw new RangeError(`readNative expects options.beforeCounter to be true or false, got ${show(beforeCounter)}`);
+  }
   const tens = TENS[Math.floor(n / 10)];
   const ones = ONES[n % 10];
   if (!beforeCounter) return tens + ones;

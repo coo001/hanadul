@@ -70,9 +70,19 @@ test('readNative(3, null) throws a RangeError naming readNative and the options'
 });
 
 test('options that are not an object throw a RangeError showing the value', () => {
-  for (const [bad, shown] of [[3, '3'], ['x', 'x'], [true, 'true']]) {
+  for (const [bad, shown] of [[3, '3'], ['x', 'x'], [true, 'true'], [[], '[]']]) {
     assert.throws(
       () => readNative(3, bad),
+      (e) => e instanceof RangeError && /readNative/.test(e.message) && e.message.includes(shown),
+      String(bad),
+    );
+  }
+});
+
+test('a beforeCounter that is not true or false throws a RangeError showing the value', () => {
+  for (const [bad, shown] of [['x', 'x'], [1, '1'], [null, 'null']]) {
+    assert.throws(
+      () => readNative(3, { beforeCounter: bad }),
       (e) => e instanceof RangeError && /readNative/.test(e.message) && e.message.includes(shown),
       String(bad),
     );
