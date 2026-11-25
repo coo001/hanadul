@@ -77,6 +77,9 @@ the model writes are untrusted code.
   but not write. The runner lists every file it wrote in `.factory/files.txt`;
   the workflows stage only those, and if `git status` shows any other change
   they comment, add `needs-human` and push nothing.
+- Claude Code runs in an empty temporary folder with project and local
+  settings off, so a branch's `.claude/` settings, hooks, MCP servers or
+  `CLAUDE.md` never load while it holds `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ## What stays with a person
 
