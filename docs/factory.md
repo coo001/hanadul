@@ -43,11 +43,14 @@ Then the workflow either:
 Qodo reviews the PR. Qodo skips PRs opened by bots by default, so
 `.pr_agent.toml` turns that off (`[github_app] ignore_bot_pr = false`).
 `.github/workflows/factory-review.yml` runs when Qodo posts or edits its
-summary comment (it edits the same comment each time it reviews again). A
-review whose comment is older than the PR's latest commit is ignored. For a
-current review:
+summary comment (it edits the same comment each time it reviews again). It
+acts only on a review of the PR's current head: Qodo names the reviewed commit
+in a hidden `<!-- https://github.com/.../commit/<sha> -->` marker (without one,
+the comment must be newer than the head commit). Every factory comment carries
+`<!-- factory:handled <sha> -->`, and a head that already has one is not
+handled again. For a current review:
 
-- no findings: it says so on the PR once per commit and waits;
+- no findings: it says so on the PR and waits;
 - findings: the runner gets the review text and the number of findings,
   checks each finding against the code, fixes the ones it confirms and
   explains the ones it rejects. The reply must answer every finding with
