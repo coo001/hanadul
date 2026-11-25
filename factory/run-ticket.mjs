@@ -69,12 +69,20 @@ async function askModel(messages, attempt) {
   // runner itself writes the files. It signs in with CLAUDE_CODE_OAUTH_TOKEN
   // (a subscription token from `claude setup-token`) and gets no other secret.
   const { system, prompt } = toClaudePrompt(messages);
-  mkdirSync('.factory', { recursive: true });
-  writeFileSync('.factory/system-prompt.md', system);
-  const r = spawnSync('claude', ['-p', '--output-format', 'json', '--tools', '', '--model', MODEL, '--system-prompt-file', '.factory/system-prompt.md', '--no-session-persistence'], {
-    input: prompt, encoding: 'utf8', timeout: MODEL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
-    env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '/tmp', CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '' },
-  });
+  // Claude Code reads settings, hooks, MCP servers and CLAUDE.md from the folder
+  // it runs in. The checkout may be an untrusted PR branch, so it runs in an
+  // empty folder of its own and loads no project or local settings.
+  const cwd = mkdtempSync(join(tmpdir(), 'factory-model-'));
+  let r;
+  try {
+    writeFileSync(join(cwd, 'system-prompt.md'), system);
+    r = spawnSync('claude', ['-p', '--output-format', 'json', '--tools', '', '--model', MODEL, '--system-prompt-file', join(cwd, 'system-prompt.md'), '--setting-sources', 'user', '--strict-mcp-config', '--no-session-persistence'], {
+      cwd, input: prompt, encoding: 'utf8', timeout: MODEL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
+      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '/tmp', CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '' },
+    });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
   if (r.error) throw new Error(`could not run claude: ${r.error.message}`);
   let out;
   try {
