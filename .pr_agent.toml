@@ -1,0 +1,4 @@
+# Qodo settings. The factory's PRs are opened by github-actions[bot], and Qodo
+# skips PRs opened by bots unless this is off.
+[github_app]
+ignore_bot_pr = false
