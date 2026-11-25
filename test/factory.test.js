@@ -108,3 +108,9 @@ test('checkPaths rejects a path with a trailing newline', () => {
   assert.notEqual(checkPaths(['src/a.js\n']), '');
   assert.notEqual(checkPaths(['README.md\n']), '');
 });
+
+test('checkReviewReply does not count files sent back unchanged as a fix', () => {
+  const reply = { files: [{ path: 'src/a.js', content: 'x\n' }], findings: [{ finding: 'f', decision: 'fixed', reason: 'r' }] };
+  assert.match(checkReviewReply(reply, 1, () => true), /changes no files/);
+  assert.equal(checkReviewReply(reply, 1, () => false), '');
+});
