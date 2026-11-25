@@ -59,7 +59,11 @@ const DECISIONS = new Set(['fixed', 'not a problem']);
  * @param {number} expected the number of findings in the review
  * @returns {string} a description of the problem, or ''
  */
-export function checkReviewReply(reply, expected) {
+/**
+ * @param {(file: {path: string, content: string}) => boolean} [isUnchanged] true when writing
+ *   this file would leave its current content as it is
+ */
+export function checkReviewReply(reply, expected, isUnchanged = () => false) {
   const { files, findings } = reply;
   if (findings.length !== expected) {
     return `The review has ${expected} finding(s) but the reply answers ${findings.length}. Give exactly one "findings" entry per review finding, each with "finding", "decision" and "reason" strings.`;
@@ -71,7 +75,9 @@ export function checkReviewReply(reply, expected) {
     if (typeof f.reason !== 'string' || f.reason.trim() === '') bad.push(`entry ${i + 1} needs a "reason"`);
   });
   if (bad.length) return `The review findings are not all answered: ${bad.join('; ')}.`;
-  if (files.length === 0 && findings.some((f) => f.decision === 'fixed')) return 'A finding is marked "fixed" but the reply changes no files.';
+  if (findings.some((f) => f.decision === 'fixed') && !files.some((f) => !isUnchanged(f))) {
+    return 'A finding is marked "fixed" but the reply changes no files (every file it sends has its current content).';
+  }
   return '';
 }
 
