@@ -33,9 +33,24 @@ test('the command prints the reading', () => {
 });
 
 test('the command explains bad input and exits non-zero', () => {
-  for (const [args, code] of [[[], 2], [['abc'], 2], [['10000'], 1]]) {
+  for (const [args, code] of [[[], 2], [['abc'], 2], [['-1'], 2], [['10000'], 1]]) {
     const r = spawnSync('node', ['bin/hanadul.js', ...args], { encoding: 'utf8' });
     assert.equal(r.status, code, args.join(' '));
     assert.notEqual(r.stderr, '');
+    assert.equal(r.stdout, '');
   }
+});
+
+test('the command does not read leading zeros as a smaller number', () => {
+  const r = spawnSync('node', ['bin/hanadul.js', '007'], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /"007"/);
+});
+
+test('the error quotes the input as typed', () => {
+  const typed = '99999999999999999999';
+  const r = spawnSync('node', ['bin/hanadul.js', typed], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, new RegExp(`"${typed}"`));
 });
