@@ -31,6 +31,12 @@ Korean uses Sino-Korean, so those throw.
 With `{ beforeCounter: true }` it gives the form used in front of a counter:
 3 is "세" (세 개), 20 is "스무" (스무 살), 21 is "스물한".
 
+## The factory
+
+An issue labelled `ready-for-agent` is picked up by a GitHub Actions workflow,
+implemented by a model, tested, and opened as a PR for Qodo to review. I
+decide what gets merged. See [docs/factory.md](docs/factory.md).
+
 ## Planned
 
 - Sino-Korean and native Korean numerals

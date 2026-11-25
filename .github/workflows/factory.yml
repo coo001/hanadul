@@ -1,0 +1,77 @@
+name: factory
+
+# A ticket labelled "ready-for-agent" starts the factory. No session, no prompt.
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to work on
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  models: read
+
+# One ticket at a time.
+concurrency:
+  group: factory
+  cancel-in-progress: false
+
+jobs:
+  ticket:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready-for-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ISSUE: ${{ github.event.issue.number || inputs.issue }}
+      REPO: ${{ github.repository }}
+      FACTORY_TEST_USER: factorytest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Create the unprivileged user that runs the checks
+        run: id -u "$FACTORY_TEST_USER" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$FACTORY_TEST_USER"
+      - name: Work on the ticket
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node factory/run-ticket.mjs
+      - name: Open a PR for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat .factory/log.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(cat .factory/status)" != "ok" ]; then
+            gh issue comment "$ISSUE" -R "$REPO" --body-file .factory/log.md
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label needs-human
+            exit 0
+          fi
+          branch="factory/issue-$ISSUE"
+          title="$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)"
+          git config user.name "hanadul-factory"
+          git config user.email "hanadul-factory@users.noreply.github.com"
+          git checkout -b "$branch"
+          # Stage only what the runner wrote; any other change stops the run.
+          if [ -s .factory/files.txt ]; then git --literal-pathspecs add --pathspec-from-file=.factory/files.txt; fi
+          extra="$(git status --porcelain --untracked-files=all -- . ':!.factory' | grep -v '^[AM]  ' || true)"
+          if [ -n "$extra" ]; then
+            gh issue comment "$ISSUE" -R "$REPO" --body "$(printf 'Factory: files changed that the runner did not write. Nothing was pushed.\n\n```\n%s\n```' "$extra")"
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label needs-human
+            exit 0
+          fi
+          git commit -m "$title" -m "Ticket #$ISSUE, written by the factory runner."
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+          if ! gh pr create -R "$REPO" --head "$branch" --base main --title "$title" --body-file .factory/pr-body.md; then
+            # Usually the repository setting "Allow GitHub Actions to create and approve pull requests" is off.
+            gh issue comment "$ISSUE" -R "$REPO" --body "Factory: pushed \`$branch\` but could not open the PR. Check Settings > Actions > General > \"Allow GitHub Actions to create and approve pull requests\"."
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label needs-human
+            exit 0
+          fi
+          gh issue edit "$ISSUE" -R "$REPO" --remove-label ready-for-agent --add-label in-review
