@@ -19,8 +19,8 @@ an issue number.) One ticket runs at a time.
 3. Refuses any file outside `src/`, `test/`, `bin/`, `docs/`, `web/` and
    `README.md`. The runner cannot edit `AGENTS.md`, `factory/`, the workflows
    or `package.json`.
-4. Writes the files and runs `npm test` with every token removed from the
-   environment, because this is where model-written code executes.
+4. Writes the files and runs `npm test` on a copy of the working tree, because
+   this is where model-written code executes. See "Isolation".
 5. If the reply is malformed, a path is refused or a test fails, sends the
    problem back and tries again. Three attempts in total.
 
@@ -39,6 +39,28 @@ comment:
 - findings: the runner gets the review text, checks each finding against the
   code, fixes the ones it confirms and explains the ones it rejects. After two
   fix rounds it stops and adds `needs-human`.
+
+## Isolation
+
+The runner holds a token with write access, and both a PR branch and the tests
+the model writes are untrusted code.
+
+- Trusted runner: `factory-review.yml` checks out the PR branch, then the
+  default branch into `.factory-trusted/`, and runs only
+  `.factory-trusted/factory/*.mjs` against the PR checkout. If the branch
+  differs from the default branch in `factory/`, `.github/` or `AGENTS.md`, it
+  comments, adds `needs-human` and runs nothing. `GH_TOKEN` is set only on the
+  steps that call `gh` or the model.
+- Separate user: on CI (`FACTORY_TEST_USER` set) the checks run as an
+  unprivileged user created by the workflow, through
+  `sudo -u <user> env -i PATH=... HOME=/tmp npm test`, so they cannot read the
+  runner's environment through `/proc`. Processes that user leaves behind are
+  killed afterwards.
+- Copy, and staging by list: the checks run in a temp copy of the working tree
+  (without `.git`, `.factory`, `.factory-trusted`) that the test user can read
+  but not write. The runner lists every file it wrote in `.factory/files.txt`;
+  the workflows stage only those, and if `git status` shows any other change
+  they comment, add `needs-human` and push nothing.
 
 ## What stays with a person
 
@@ -66,4 +88,6 @@ it. Actions on a public repository and the Models free tier need neither.
 
 `ISSUE_FILE` is the JSON `gh issue view --json number,title,body,url` prints;
 `FACTORY_STUB` is a JSON array of canned model replies, one per attempt.
-Nothing is pushed.
+Nothing is pushed. Without `FACTORY_TEST_USER` the checks still run on a copy,
+but as your own user with only secret-looking variables removed: a local run is
+not isolated, so only run replies you are willing to execute.
