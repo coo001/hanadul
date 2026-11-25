@@ -122,7 +122,7 @@ for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const paths = reply.files.map((f) => f.path);
     // A file this run wrote earlier may be written again; any other existing file must have been shown.
     problem = checkPaths(paths) || checkOverwrites(paths, shownPaths, (p) => !written.has(p) && existsSync(p));
-    if (!problem && review) problem = checkReviewReply(reply, reviewCount);
+    if (!problem && review) problem = checkReviewReply(reply, reviewCount, (f) => existsSync(f.path) && readFileSync(f.path, 'utf8') === (f.content.endsWith('\n') ? f.content : f.content + '\n'));
   } catch (err) {
     problem = err.message;
   }
