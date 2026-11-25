@@ -21,14 +21,19 @@ jobs:
     if: github.event.issue.pull_request && github.event.comment.user.login == 'qodo-code-review[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The PR branch is not trusted: only factory code from the default branch
+    # runs, and GH_TOKEN is given only to the steps that need it.
     env:
       PR: ${{ github.event.issue.number }}
       REPO: ${{ github.repository }}
-      GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      FACTORY_TEST_USER: factorytest
       MAX_ROUNDS: 2
     steps:
       - name: Find the PR branch and its ticket
         id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           branch="$(gh pr view "$PR" -R "$REPO" --json headRefName --jq .headRefName)"
           case "$branch" in factory/issue-*) ;; *) echo "Not a factory PR."; exit 0 ;; esac
@@ -40,21 +45,43 @@ jobs:
           ref: ${{ steps.pr.outputs.branch }}
           fetch-depth: 0
           persist-credentials: false
+      # Trusted copy of the runner, from the default branch. Checked out after
+      # the PR branch so the first checkout does not clean it away.
+      - uses: actions/checkout@v4
+        if: steps.pr.outputs.branch
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .factory-trusted
+          persist-credentials: false
+      - name: Keep the trusted copy out of git status and git clean
+        if: steps.pr.outputs.branch
+        run: echo '/.factory-trusted/' >> .git/info/exclude
       - uses: actions/setup-node@v4
         if: steps.pr.outputs.branch
         with:
           node-version: 22
+      - name: Create the unprivileged user that runs the checks
+        if: steps.pr.outputs.branch
+        run: id -u "$FACTORY_TEST_USER" >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin "$FACTORY_TEST_USER"
       - name: Read the review and act on it
         if: steps.pr.outputs.branch
         env:
+          GH_TOKEN: ${{ github.token }}
           COMMENT: ${{ github.event.comment.body }}
           ISSUE: ${{ steps.pr.outputs.issue }}
           BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
           mkdir -p .factory && printf '%s' "$COMMENT" > .factory/review.html
-          count="$(node -e "import('./factory/lib.mjs').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
+          count="$(node -e "import('./.factory-trusted/factory/lib.mjs').then(m=>console.log(m.countFindings(require('fs').readFileSync('.factory/review.html','utf8'))))")"
           sha="$(git rev-parse --short HEAD)"
           if [ "$count" = "null" ]; then echo "Not a review summary."; exit 0; fi
+          # The factory never changes its own rules, code or workflows.
+          own="$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" -- factory .github AGENTS.md)"
+          if [ -n "$own" ]; then
+            gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: this branch changes factory/, .github/ or AGENTS.md compared with %s. Stopping here for a person.\n\n```\n%s\n```' "$DEFAULT_BRANCH" "$own")"
+            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            exit 0
+          fi
           if [ "$count" = "0" ]; then
             gh pr comment "$PR" -R "$REPO" --body "Factory: Qodo reported no findings on $sha. Tests passed in the runner. Waiting for a person to decide on the merge."
             exit 0
@@ -65,16 +92,23 @@ jobs:
             gh pr edit "$PR" -R "$REPO" --add-label needs-human
             exit 0
           fi
-          REVIEW_FILE=.factory/review.html node factory/run-ticket.mjs
+          REVIEW_FILE=.factory/review.html node .factory-trusted/factory/run-ticket.mjs
           if [ "$(cat .factory/status)" != "ok" ]; then
             gh pr comment "$PR" -R "$REPO" --body-file .factory/log.md
             gh pr edit "$PR" -R "$REPO" --add-label needs-human
             exit 0
           fi
+          # Stage only what the runner wrote; any other change stops the run.
+          if [ -s .factory/files.txt ]; then git --literal-pathspecs add --pathspec-from-file=.factory/files.txt; fi
+          extra="$(git status --porcelain --untracked-files=all -- . ':!.factory' | grep -v '^[AM]  ' || true)"
+          if [ -n "$extra" ]; then
+            gh pr comment "$PR" -R "$REPO" --body "$(printf 'Factory: files changed that the runner did not write. Nothing was pushed.\n\n```\n%s\n```' "$extra")"
+            gh pr edit "$PR" -R "$REPO" --add-label needs-human
+            exit 0
+          fi
           gh pr comment "$PR" -R "$REPO" --body-file .factory/pr-body.md
-          if [ -z "$(git status --porcelain -- . ':!.factory')" ]; then exit 0; fi
+          if git diff --cached --quiet; then exit 0; fi
           git config user.name "hanadul-factory"
           git config user.email "hanadul-factory@users.noreply.github.com"
-          git add -A -- . ':!.factory'
           git commit -m "Review round $((rounds + 1)): fix confirmed findings"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:$BRANCH"
