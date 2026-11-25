@@ -7,6 +7,8 @@
 //
 // With REVIEW_FILE set, the model also gets the text of a code review and is
 // asked to check each finding against the code before changing anything.
+// REVIEW_COUNT (the number of findings in that review) is then required, and
+// the reply must answer exactly that many.
 // Result: .factory/status ("ok" or "stuck"), .factory/pr-body.md, .factory/log.md,
 // .factory/files.txt (every path the runner wrote, one per line; the workflows
 // stage only these).
@@ -14,17 +16,31 @@
 // Repository files are read and written relative to the working directory, so
 // the workflow can run a trusted copy of this script against another checkout.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, cpSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, cpSync, rmSync, rmdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList } from './lib.mjs';
+import { checkPaths, parseReply, buildPrompt, stripHtml, isCopied, testCommand, fileList, isAllowed, selectContext, checkOverwrites, checkReviewReply } from './lib.mjs';
 
-const { ISSUE, REPO, GH_TOKEN, REVIEW_FILE, FACTORY_STUB } = process.env;
+const { ISSUE, REPO, GH_TOKEN, REVIEW_FILE, REVIEW_COUNT, FACTORY_STUB } = process.env;
 const MODEL = process.env.FACTORY_MODEL || 'openai/gpt-4.1';
 const MAX_ATTEMPTS = Number(process.env.FACTORY_MAX_ATTEMPTS || 3); // first try + 2 retries
+const CONTEXT_BUDGET = 60_000; // characters of file contents in the prompt
 const log = [];
 const note = (line) => { log.push(line); console.log(line); };
 const written = new Set();
+const createdDirs = new Set();
+
+// After a failed run, put back exactly what the runner wrote and nothing else.
+function undoWrites(trackedSet) {
+  for (const p of written) {
+    if (trackedSet.has(p)) execFileSync('git', ['--literal-pathspecs', 'checkout', '--', p]);
+    else rmSync(p, { force: true });
+  }
+  // Deepest first, and only if empty: something else may have been put there.
+  for (const d of [...createdDirs].sort((a, b) => b.length - a.length)) {
+    try { rmdirSync(d); } catch { /* not empty */ }
+  }
+}
 
 function finish(status, prBody = '') {
   mkdirSync('.factory', { recursive: true });
@@ -87,25 +103,33 @@ const issue = readIssue();
 const review = REVIEW_FILE ? stripHtml(readFileSync(REVIEW_FILE, 'utf8')).slice(0, 6000) : '';
 note(`Ticket #${issue.number}: ${issue.title}`);
 note(`Model: ${FACTORY_STUB ? 'stub' : MODEL}. Attempts allowed: ${MAX_ATTEMPTS}.${review ? ' Mode: review findings.' : ''}`);
+const reviewCount = Number(REVIEW_COUNT);
+if (review && !(REVIEW_COUNT && Number.isInteger(reviewCount) && reviewCount >= 0)) {
+  note(`REVIEW_COUNT must be the number of findings in the review, got ${JSON.stringify(REVIEW_COUNT ?? '')}.`);
+  finish('stuck');
+}
 
-const messages = buildPrompt({
-  issue, review, rules: read('AGENTS.md'), tracked,
-  sources: tracked.filter((p) => /^(src|bin)\//.test(p)).map((p) => ({ path: p, content: read(p) })),
-  exampleTest: read('test/native.test.js').slice(0, 1500),
-});
+const { shown, notShown } = selectContext(tracked.filter(isAllowed).map((p) => ({ path: p, content: read(p) })), CONTEXT_BUDGET);
+if (notShown.length) note(`Not shown to the model (over ${CONTEXT_BUDGET} characters): ${notShown.join(', ')}`);
+const shownPaths = new Set(shown.map((f) => f.path));
+const messages = buildPrompt({ issue, review, reviewCount, rules: read('AGENTS.md'), tracked, shown, notShown });
 
 let reply;
 for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
   let problem;
   try {
     reply = parseReply(await askModel(messages, attempt));
-    problem = checkPaths(reply.files.map((f) => f.path));
+    const paths = reply.files.map((f) => f.path);
+    // A file this run wrote earlier may be written again; any other existing file must have been shown.
+    problem = checkPaths(paths) || checkOverwrites(paths, shownPaths, (p) => !written.has(p) && existsSync(p));
+    if (!problem && review) problem = checkReviewReply(reply, reviewCount);
   } catch (err) {
     problem = err.message;
   }
   if (!problem && reply.files.length === 0 && !review) problem = 'The reply changed no files.';
   if (!problem) {
     for (const f of reply.files) {
+      for (let d = dirname(f.path); d !== '.' && !existsSync(d); d = dirname(d)) createdDirs.add(d);
       mkdirSync(dirname(f.path), { recursive: true });
       writeFileSync(f.path, f.content.endsWith('\n') ? f.content : f.content + '\n');
       written.add(f.path);
@@ -133,6 +157,5 @@ for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
   messages.push({ role: 'user', content: `That did not pass. ${problem}\nReply again with the complete JSON, including every file in full.` });
 }
 note(`Stopped after ${MAX_ATTEMPTS} attempts. A person needs to look.`);
-execFileSync('git', ['checkout', '--', '.']);
-execFileSync('git', ['clean', '-fdq', '--exclude=.factory']);
+undoWrites(new Set(tracked));
 finish('stuck');
